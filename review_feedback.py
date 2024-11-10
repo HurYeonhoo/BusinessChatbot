@@ -2,7 +2,7 @@ import openai
 import pandas as pd
 
 def main():
-    openai.api_key = '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' # api_key
+    openai.api_key = 'api_key'
     df_reviews = pd.read_csv(r"gpt_contest\review_labeled.csv", sep='\t')
     # df_reviews.head()
 
