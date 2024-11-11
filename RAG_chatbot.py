@@ -1,69 +1,316 @@
 import streamlit as st
 import tiktoken
-from loguru import logger 
-
-from langchain.chains import ConversationalRetrievalChain 
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from bs4 import BeautifulSoup
+import pandas as pd
+from loguru import logger
+from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
-
-from langchain.document_loaders import PyPDFLoader
-from langchain.document_loaders import Docx2txtLoader
-from langchain.document_loaders import UnstructuredPowerPointLoader
-
+from langchain.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredPowerPointLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import HuggingFaceEmbeddings
-
-from langchain.memory import ConversationBufferMemory 
-from langchain.vectorstores import FAISS 
-
-# from streamlit_chat import message
+from langchain.memory import ConversationBufferMemory
+from langchain.vectorstores import FAISS
 from langchain.callbacks import get_openai_callback
 from langchain.memory import StreamlitChatMessageHistory
+from langchain.docstore.document import Document
+
+from review_feedback import ReviewFeedback
+from review_marketing import ReviewMarketing
+from review_crawling import Crawling
+from review_classification import Classification
+from utils import get_text, tiktoken_len, get_text_chunks, chunk_dataframe_to_documents, get_vectorstore, get_conversation_chain
+
+openai_api_key = "api_key"
 
 def main():
-    st.set_page_config( 
-    page_title="OneClickMakerChatbot",  
-    page_icon="💬") 
-    st.title("_Chatbot :blue[입니다!]_ 💩")  
+    st.set_page_config(
+        page_title="OneClickMakerChatbot",
+        
+        page_icon="💬"
+    )
 
+    # CSS 
+    st.markdown("""
+        <style>
+            .stTabs [data-baseweb="tab-list"] {
+                gap: 24px;
+                margin-left: -450px;  /* -50px에서 변경 */
+                margin-top: -70px;  /* 위로 이동 */
+            }
+
+            .stTabs [data-baseweb="tab"] {
+                height: 50px;
+                white-space: pre-wrap;
+                background-color: transparent;
+                border-radius: 4px;
+                color: #6C7583;
+                font-size: 14px;
+                font-weight: 400;
+                padding: 0px 0px;
+            }
+            
+            .stTabs [aria-selected="true"] {
+                background-color: transparent;
+                color: #09AB3B;
+                font-weight: 600;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
+    # 세션 초기화
     if "conversation" not in st.session_state:
         st.session_state.conversation = None
-
-    if "chat_history" not in st.session_state: 
+    if "chat_history" not in st.session_state:
         st.session_state.chat_history = None
-
-    if "processComplete" not in st.session_state: 
+    if "processComplete" not in st.session_state:
         st.session_state.processComplete = None
+    if "page" not in st.session_state:
+        st.session_state.page = "main"
+    if "active_tab" not in st.session_state:
+        st.session_state.active_tab = 1
+    if "store_name" not in st.session_state:
+        st.session_state.store_name = ""    
+    if "info_df" not in st.session_state:
+        st.session_state.info_df = None
+    if "reviews_df" not in st.session_state:
+        st.session_state.reviews_df = None
+    if "crawling_complete" not in st.session_state:
+        st.session_state.crawling_complete = False
+    if "review_analysis_complete" not in st.session_state:
+        st.session_state.review_analysis_complete = False
+    if "response_feedback" not in st.session_state:
+        st.session_state.response_feedback = None
+    if "response_marketing" not in st.session_state:
+        st.session_state.response_marketing = None
+    
+    # 탭 생성
+    tab1, tab2, tab3 = st.tabs(['챗봇을 생성해보아요!', '관리 페이지', 'Chatbot'])
+
+    # 페이지 컨트롤
+    if st.session_state.page == "main":
+        with tab1:
+            process, uploaded_files = handle_tab1_content()
+
+        with tab2:
+            handle_tab2_content()
+
+        with tab3:
+            handle_chatbot_tab(process, uploaded_files)
+
+    if st.session_state.page == "review_analysis":
+        st.header("리뷰 분석 결과")
+
+        # 크롤링이 완료되지 않은 경우에만 크롤링 실행
+        if not st.session_state.crawling_complete:
+            with st.spinner("리뷰를 수집 중이에요..."):
+                crawler = Crawling(st.session_state.store_name)
+                out = crawler.get_reviews()
+                classifica = Classification(out, openai_api_key)
+                st.session_state.reviews_df = classifica.review_classification()
+                st.session_state.crawling_complete = True
+                st.session_state.review_analysis_complete = True  # 리뷰 분석 완료 설정
+
+        # 리뷰 분석 결과 출력
+        st.write("성공")
+        
+        if st.button("뒤로가기"):
+            st.session_state.page = "main"
+            st.session_state.active_tab = 1
+            st.rerun()
+
+    elif st.session_state.page == "improvement_suggestions":
+        st.header("개선 방안")
+        st.divider()
+
+        with st.spinner("분석 중이에요..."):
+            # response_feedback이 없는 경우에만 새로 생성
+            if st.session_state.response_feedback is None:
+                feedback = ReviewFeedback(st.session_state.reviews_df, openai_api_key)
+                st.session_state.response_feedback = feedback.make_feedback()
+        
+        st.markdown(st.session_state.response_feedback)
+
+        st.divider()
+        if st.button("뒤로가기"):
+            st.session_state.page = "main"
+            st.session_state.active_tab = 1
+            st.rerun()
+
+    elif st.session_state.page == "marketing_tips":
+        st.header("마케팅 방법")
+        st.divider()
+
+        with st.spinner("분석 중이에요..."):
+            # response_marketing이 없는 경우에만 새로 생성
+            if st.session_state.response_marketing is None:
+                marketing = ReviewMarketing(st.session_state.reviews_df, openai_api_key)
+                st.session_state.response_marketing = marketing.make_marketing()
+        
+        st.markdown(st.session_state.response_marketing)
+
+        st.divider()
+        if st.button("뒤로가기"):
+            st.session_state.page = "main"
+            st.session_state.active_tab = 1
+            st.rerun()
 
 
-    with st.sidebar: # 왼쪽 사이드바 구성
-        st.header("업종 선택")
-        business_type = st.selectbox( # 업종 선택 메뉴
-        "업종을 선택하세요",
-        ["음식점", "미용실", "쇼핑몰", "부동산", "관광숙박업"]
-        )
+def handle_tab1_content():
+    st.title(":blue[리뷰 분석] 및 :blue[챗봇 생성]💩👋")
+    st.write("")
+    st.markdown("""
 
-        st.header("PDF 제출")
-        uploaded_files =  st.file_uploader("Upload your file", type=['pdf','docx'],accept_multiple_files=True)
-        process = st.button("Process") 
+                step☝️. 업종을 선택해주세요.
+                
 
+                step✌️. 가게 이름을 입력해주세요. 추가로 원하는 정보는 pdf를 제출하세요.
+                
 
-    # API 키 설정
-    openai_api_key = "api_key"
+                step🤞. Process 버튼을 클릭하세요!
 
-    if process: # process 버튼이 눌렸을 때 실행
-        files_text = get_text(uploaded_files)  
-        text_chunks = get_text_chunks(files_text) 
-        vetorestore = get_vectorstore(text_chunks) 
+            """)
+    st.divider()
 
-        # LLM이 이 벡터store를 갖고 답변할 수 있도록 체인 구성
-        st.session_state.conversation = get_conversation_chain(vetorestore,openai_api_key) 
-        st.session_state.processComplete = True
+    st.subheader("업종 선택")
+    business_type = st.selectbox("업종을 선택하세요.", ["음식점", "미용실", "쇼핑몰", "부동산", "관광숙박업"])
+    st.divider()
 
+    st.subheader("가게 이름 입력")
+    name = st.text_input('가게 이름을 입력하세요!', key='name_input')
+    if name and name != st.session_state.store_name:  # 가게 이름이 변경된 경우, 세션 초기화
+        st.session_state.store_name = name
+        st.session_state.crawling_complete = False
+        st.session_state.info_df = None
+        st.session_state.reviews_df = None
+        st.session_state.response_feedback = None
+        st.session_state.response_marketing = None
+
+    if st.session_state.store_name:  # 저장된 이름이 있으면 표시
+        st.markdown(f'「:violet[*{st.session_state.store_name}*]」 가게 사장님 안녕하세요!')
+    st.divider()
+
+    st.subheader("PDF 제출")
+    uploaded_files = st.file_uploader("Upload your file", type=['pdf', 'docx'], accept_multiple_files=True)
+    st.divider()
+    
+    process = st.button("Process") 
+
+    if process:
+        st.session_state['Process'] = True  # 버튼 상태를 세션에 저장
+        with st.spinner("가게 정보를 수집 중이에요..."):
+            start_processing(uploaded_files)  # Process 버튼 클릭 시 함수 호출
+
+    return process, uploaded_files
+
+def handle_tab2_content():
+    if st.session_state.store_name:  # 가게 이름이 있는 경우
+        st.write("")
+        st.header(f":violet[*{st.session_state.store_name}*]&nbsp;&nbsp;리뷰들을 관리해보세요!")
+        st.write(""); st.write(""); st.write("")
+    else:  # 가게 이름이 없는 경우
+        st.write("")
+        st.header("리뷰들을 관리해보세요!")
+        st.write(""); st.write(""); st.write("")
+
+    col1, col2, col3 = st.columns([1, 1, 1])
+    
+    # 리뷰 분석
+    with col1:
+        with st.expander(label="리뷰 분석", expanded=True):
+            st.markdown("""
+                가게의 리뷰를 바탕으로 좋은 리뷰와 나쁜 리뷰를 분석해드립니다!
+                
+                리뷰를 한 눈에 확인해 볼 수 있어요.
+                """)
+            st.write("")
+            if st.button("리뷰 분석"):
+                st.session_state.page = "review_analysis"
+                st.rerun()
+
+    # 개선 방안
+    with col2:
+        with st.expander(label='개선 방안', expanded=True):
+            st.markdown("""
+                손님들이 작성한 리뷰를 바탕으로 가게의 개선 방안을 알려드립니다!
+                        
+                가게의 문제점 분석을 통해 우선적으로 개선할 수 있어요.
+                """)
+            st.write("")
+            if st.button("개선 방안"):
+                if st.session_state.review_analysis_complete:
+                    st.session_state.page = "improvement_suggestions"
+                    st.rerun()
+                else:
+                    st.warning("리뷰 분석을 먼저 완료하세요.")
+
+    # 마케팅 방법
+    with col3:
+        with st.expander(label='마케팅 방법', expanded=True):
+            st.markdown("""
+                손님들이 좋아하는 메뉴와 서비스를 바탕으로 도움되는 마케팅 방법을 알려드립니다!
+                
+                가게를 더욱 발전시킬 수 있어요.
+                """)
+            st.write("")
+            if st.button("마케팅 방법"):
+                if st.session_state.review_analysis_complete:
+                    st.session_state.page = "marketing_tips"
+                    st.rerun()
+                else:
+                    st.warning("리뷰 분석을 먼저 완료하세요.")
+                
+def start_processing(uploaded_files):
+    crawler = Crawling(st.session_state.store_name)
+    st.session_state.info_df = crawler.get_info()
+    info_df_documents = chunk_dataframe_to_documents(st.session_state.info_df, chunk_size=900, chunk_overlap=100)
+    
+    # 파일이 있는 경우에만 처리
+    if uploaded_files:
+        files_text = get_text(uploaded_files)
+        text_chunks = get_text_chunks(files_text)
+        combined_chunks = text_chunks + info_df_documents
+    else:
+        combined_chunks = info_df_documents
+
+    # 벡터스토어 생성 및 대화 체인
+    vectorstore = get_vectorstore(combined_chunks)
+    st.session_state.conversation = get_conversation_chain(vectorstore, openai_api_key)
+    st.session_state.processComplete = True
+
+    st.success("가게 정보 수집이 완료되었습니다!")
+
+def handle_chatbot_tab(process, uploaded_files):
+    if st.session_state.store_name:  # 가게 이름이 있는 경우
+        st.write("")
+        st.header(f"저는 :violet[*{st.session_state.store_name}*]&nbsp;&nbsp;음식점의 챗봇입니다!💩")
+        st.write(""); st.write(""); st.write("")
+
+    else:  # 가게 이름이 없는 경우
+        st.write("")
+        st.subheader("저는 챗봇입니다!💩")
+        st.write(""); st.write(""); st.write("")
 
     if 'messages' not in st.session_state:
-        st.session_state['messages'] = [{"role": "assistant",  # 환영 메세지
-                                        "content": "안녕하세요! 궁금한 것이 있으면 언제든 물어봐주세요!"}] 
-     
+        if st.session_state.store_name:  # 가게 이름이 있는 경우
+            welcome_message = f"안녕하세요! :violet[*{st.session_state.store_name}*]&nbsp;&nbsp;음식점에 대해 궁금한 것이 있으면 언제든 물어봐주세요!"
+        else:  # 가게 이름이 없는 경우
+            welcome_message = "안녕하세요! 궁금한 것이 있으면 언제든 물어봐주세요!"
+        
+        st.session_state['messages'] = [{"role": "assistant", "content": welcome_message}]
+
+    # 기존 메시지를 업데이트할 때도 동일한 조건 적용
+    if len(st.session_state['messages']) > 0 and st.session_state['messages'][0]["role"] == "assistant":
+        if st.session_state.store_name:  # 가게 이름이 있는 경우
+            welcome_message = f"안녕하세요! :violet[*{st.session_state.store_name}*]&nbsp;&nbsp; 음식점에 대해 궁금한 것이 있으면 언제든 물어봐주세요!"
+        else:  # 가게 이름이 없는 경우
+            welcome_message = "안녕하세요! 궁금한 것이 있으면 언제든 물어봐주세요!"
+            
+        st.session_state['messages'][0]["content"] = welcome_message
+
     for message in st.session_state.messages: 
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
@@ -85,81 +332,16 @@ def main():
                 with get_openai_callback() as cb:
                     st.session_state.chat_history = result['chat_history']
                 response = result['answer']
-                source_documents = result['source_documents']  # 참고한 문서 확인
+                #source_documents = result['source_documents']  # 참고한 문서 확인
 
                 st.markdown(response)
-                with st.expander("참고 문서 확인"):
-                    st.markdown(source_documents[0].metadata['source'], help = source_documents[0].page_content)
+                #with st.expander("참고 문서 확인"):
+                    #st.markdown(source_documents[0].metadata['source'], help = source_documents[0].page_content)
                     #st.markdown(source_documents[1].metadata['source'], help = source_documents[1].page_content)
                     #st.markdown(source_documents[2].metadata['source'], help = source_documents[2].page_content)
                     
-# Add assistant message to chat history
+        # Add assistant message to chat history
         st.session_state.messages.append({"role": "assistant", "content": response})
-
-def tiktoken_len(text):
-    tokenizer = tiktoken.get_encoding("cl100k_base")
-    tokens = tokenizer.encode(text)
-    return len(tokens)
-
-def get_text(docs):
-    doc_list = []
-    
-    for doc in docs:
-        file_name = doc.name  
-        with open(file_name, "wb") as file: 
-            file.write(doc.getvalue())
-            logger.info(f"Uploaded {file_name}")
-        if '.pdf' in doc.name:
-            loader = PyPDFLoader(file_name)
-            documents = loader.load_and_split()
-        elif '.docx' in doc.name:
-            loader = Docx2txtLoader(file_name)
-            documents = loader.load_and_split()
-        elif '.pptx' in doc.name:
-            loader = UnstructuredPowerPointLoader(file_name)
-            documents = loader.load_and_split()
-
-        doc_list.extend(documents)
-    return doc_list
-
-
-def get_text_chunks(text):  # 텍스트를 청크로 나누기
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=900,
-        chunk_overlap=100,
-        length_function=tiktoken_len
-    )
-    chunks = text_splitter.split_documents(text)
-    return chunks
-
-
-def get_vectorstore(text_chunks):  # 텍스트 청크를 벡터로 변환해 FAISS 벡터 스토어에 저장.
-    embeddings = HuggingFaceEmbeddings(
-                                        model_name="jhgan/ko-sroberta-multitask",
-                                        model_kwargs={'device': 'cpu'},
-                                        encode_kwargs={'normalize_embeddings': True}
-                                        )  
-    vectordb = FAISS.from_documents(text_chunks, embeddings)
-    return vectordb
-
-def get_conversation_chain(vetorestore,openai_api_key): # 대화 체인 생성
-    llm = ChatOpenAI(openai_api_key=openai_api_key, model_name = 'gpt-3.5-turbo',temperature=0)
-    conversation_chain = ConversationalRetrievalChain.from_llm(
-            llm=llm, 
-            chain_type="stuff", 
-            retriever=vetorestore.as_retriever(search_type = 'mmr', vervose = True), 
-            memory=ConversationBufferMemory(memory_key='chat_history', return_messages=True, output_key='answer'),
-            get_chat_history=lambda h: h,
-            return_source_documents=True,
-            verbose = True
-        )
-
-    return conversation_chain
-
 
 if __name__ == '__main__':
     main()
-
-
-
-
