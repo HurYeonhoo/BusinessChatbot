@@ -24,7 +24,7 @@ from review_feedback import ReviewFeedback
 from review_marketing import ReviewMarketing
 from review_crawling import Crawling
 from review_classification import Classification
-from word import SentimentWordCloud
+from word import WordCloud
 from utils import get_text, tiktoken_len, get_text_chunks, chunk_dataframe_to_documents, get_vectorstore, get_conversation_chain
 
 openai_api_key = "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"
@@ -126,7 +126,7 @@ def main():
                 st.session_state.reviews_df = classifica.review_classification()
 
                 if st.session_state.response_feedback is None:
-                    wordcloud = SentimentWordCloud(st.session_state.reviews_df)
+                    wordcloud = WordCloud(st.session_state.reviews_df)
                     st.session_state.response_image = wordcloud.generate_wordcloud()
 
                     st.session_state.crawling_complete = True
