@@ -42,41 +42,47 @@ class SentimentWordCloud:
         positive_count = Counter(positive_nouns).most_common(30)
         negative_count = Counter(negative_nouns).most_common(30)
         
-        # 길이 2 이상 추출
-        combined_freq = {}
-        positive_words = set(word for word, _ in positive_count)
-        for word, freq in positive_count:
-            combined_freq[word] = freq
-        for word, freq in negative_count:
-            if word in positive_words:
-                combined_freq[f"{word}_neg"] = freq
-            else:
-                combined_freq[word] = freq
-
         # 색상을 긍정/부정에 따라 지정하는 함수
-        def color_func(word, *args, **kwargs):
-            if word in dict(positive_count):
-                return 'blue'
-            elif word in dict(negative_count):
-                return 'red'
-            else:
-                return 'red'
+        def color_func_positive(word, *args, **kwargs):
+            return 'blue'
 
-        # 워드 클라우드 생성
-        wc = WordCloud(
+        def color_func_negative(word, *args, **kwargs):
+            return 'red'
+
+        # 긍정 워드 클라우드 생성
+        wc_positive = WordCloud(
             font_path='data/NanumGothic-Bold.ttf',
             background_color='white',
             width=800,
             height=600,
-            color_func=color_func
-        ).generate_from_frequencies(combined_freq)
+            color_func=color_func_positive
+        ).generate_from_frequencies(dict(positive_count))
 
-        fig = plt.figure(figsize=(10, 10))
-        plt.imshow(wc, interpolation='bilinear')
+        # 부정 워드 클라우드 생성
+        wc_negative = WordCloud(
+            font_path='data/NanumGothic-Bold.ttf',
+            background_color='white',
+            width=800,
+            height=600,
+            color_func=color_func_negative
+        ).generate_from_frequencies(dict(negative_count))
+
+        # 각각의 워드 클라우드를 이미지로 저장하고 반환
+        img_buffer_positive = BytesIO()
+        img_buffer_negative = BytesIO()
+
+        # 긍정 워드 클라우드 저장
+        plt.figure(figsize=(10, 10))
+        plt.imshow(wc_positive, interpolation='bilinear')
         plt.axis('off')
-        
-        # 이미지 데이터를 반환
-        img_buffer = BytesIO()
-        plt.savefig(img_buffer, format='png', dpi=300, bbox_inches='tight', transparent=True)
-        img_buffer.seek(0)
-        return img_buffer.getvalue()
+        plt.savefig(img_buffer_positive, format='png', dpi=300, bbox_inches='tight', transparent=True)
+        img_buffer_positive.seek(0)
+
+        # 부정 워드 클라우드 저장
+        plt.figure(figsize=(10, 10))
+        plt.imshow(wc_negative, interpolation='bilinear')
+        plt.axis('off')
+        plt.savefig(img_buffer_negative, format='png', dpi=300, bbox_inches='tight', transparent=True)
+        img_buffer_negative.seek(0)
+
+        return img_buffer_positive.getvalue(), img_buffer_negative.getvalue()
