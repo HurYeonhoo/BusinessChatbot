@@ -4,7 +4,6 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from bs4 import BeautifulSoup
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
@@ -24,11 +23,12 @@ from review_feedback import ReviewFeedback
 from review_marketing import ReviewMarketing
 from review_crawling import Crawling
 from review_classification import Classification
-from word import WordCloud
+from chat_analysis import ChatAnalysis
+from word import SentimentWordCloud
+from store_analysis import StoreAnalysis
 from utils import get_text, tiktoken_len, get_text_chunks, chunk_dataframe_to_documents, get_vectorstore, get_conversation_chain
 
-openai_api_key = "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"
-
+openai_api_key = "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"
 fontprop = fm.FontProperties(fname='data/NanumGothic-Bold.ttf')
 
 def main():
@@ -73,32 +73,55 @@ def main():
         st.session_state.chat_history = None
     if "processComplete" not in st.session_state:
         st.session_state.processComplete = None
+
     if "page" not in st.session_state:
         st.session_state.page = "main"
     if "active_tab" not in st.session_state:
         st.session_state.active_tab = 1
+
     if "store_name" not in st.session_state:
-        st.session_state.store_name = ""    
+        st.session_state.store_name = ""
+    if "store_name_B" not in st.session_state:
+        st.session_state.store_name_B = ""
+
     if "info_df" not in st.session_state:
         st.session_state.info_df = None
+    if "info_df_B" not in st.session_state:
+        st.session_state.info_df_B = None
     if "reviews_df" not in st.session_state:
         st.session_state.reviews_df = None
+    if "reviews_df_B" not in st.session_state:
+        st.session_state.reviews_df_B = None
+
     if "crawling_complete" not in st.session_state:
         st.session_state.crawling_complete = False
+    if "crawling_complete_B" not in st.session_state:
+        st.session_state.crawling_complete_B = False
     if "review_analysis_complete" not in st.session_state:
         st.session_state.review_analysis_complete = False
-    if "chatbot_finish" not in st.session_state:
-        st.session_state.chatbot_finish = False    
+    if "review_analysis_complete_B" not in st.session_state:
+        st.session_state.review_analysis_complete_B = False
+        
     if "response_feedback" not in st.session_state:
         st.session_state.response_feedback = None
     if "response_marketing" not in st.session_state:
         st.session_state.response_marketing = None
-    if "response_content" not in st.session_state:
+    if "response_image_pos" not in st.session_state:
+        st.session_state.response_image_pos = None
+    if "response_image_neg" not in st.session_state:
+        st.session_state.response_image_neg = None
+    if "response_store_B" not in st.session_state:
+        st.session_state.response_store_B = None
+
+    if "chatbot_finish" not in st.session_state:
+        st.session_state.chatbot_finish = False
+    if "response_contents" not in st.session_state:
         st.session_state.response_contents = None
-    if "response_image" not in st.session_state:
-        st.session_state.response_image = None
     if "chat_contents" not in st.session_state:
         st.session_state.chat_contents = []
+    if "content_analysis_done" not in st.session_state:
+        st.session_state.content_analysis_done = None
+        
     
     # 탭 생성
     tab1, tab2, tab3 = st.tabs(['챗봇을 생성해보아요!', '관리 페이지', 'Chatbot'])
@@ -115,73 +138,90 @@ def main():
             handle_chatbot_tab(process, uploaded_files)
 
     if st.session_state.page == "review_analysis":
-        st.header("리뷰 분석 결과")
-        st.write(""); st.write(""); st.write("")
+        
         with st.spinner("리뷰를 수집 중이에요..."):
-    
             if not st.session_state.crawling_complete:  # 크롤링이 완료되지 않은 경우에만 크롤링 실행
                 crawler = Crawling(st.session_state.store_name)
                 out = crawler.get_reviews()
                 classifica = Classification(out, openai_api_key)
                 st.session_state.reviews_df = classifica.review_classification()
+                st.session_state.crawling_complete = True
 
-                if st.session_state.response_feedback is None:
-                    wordcloud = WordCloud(st.session_state.reviews_df)
-                    st.session_state.response_image = wordcloud.generate_wordcloud()
+            if not st.session_state.review_analysis_complete:
+                wc = SentimentWordCloud(st.session_state.reviews_df)
+                st.session_state.response_image_pos, st.session_state.response_image_neg = wc.generate_wordcloud()
+                st.session_state.review_analysis_complete = True
 
-                    st.session_state.crawling_complete = True
-                    st.session_state.review_analysis_complete = True
-
-        st.subheader("자주 나오는 리뷰 단어")
-        st.image(st.session_state.response_image)
-        st.write("");st.write("");st.write("")
-
-        positive_count = st.session_state.reviews_df[st.session_state.reviews_df['label'] == 1].shape[0]
-        negative_count = st.session_state.reviews_df[st.session_state.reviews_df['label'] != 1].shape[0]
-        total_count = positive_count + negative_count
-
-        st.subheader("리뷰 개수 분석")
-        st.markdown(f"""
-                    총 리뷰 개수: {total_count}개
-
-                    긍정리뷰 개수: {positive_count}개&nbsp;&nbsp;({positive_count/total_count}%)
-    
-                    부정리뷰 개수: {negative_count}개&nbsp;&nbsp;({negative_count/total_count}%)
-                    """)             
+        st.header("리뷰 분석 결과")
         st.write(""); st.write(""); st.write("")
 
-        st.subheader("리뷰 개수 시각화")
-        review_counts = pd.DataFrame({
-            '리뷰 유형': ['긍정 리뷰', '부정 리뷰'],
-            '개수': [positive_count, negative_count]
-        })
+        col11, col22 = st.columns(2)
 
-        fig, ax = plt.subplots()
-        ax.bar(review_counts[' '], review_counts['개수'], color=['blue', 'orange'])
-        ax.set_xlabel("리뷰 유형", fontproperties=fontprop)
-        ax.set_ylabel("개수", fontproperties=fontprop)
-        ax.set_title("긍정 리뷰와 부정 리뷰 개수", fontproperties=fontprop)
+        # 리뷰 분석
+        with col11:
+            with st.expander(label="리뷰 개수 분석", expanded=True):
+                st.subheader("리뷰 개수 분석")
+                positive_count = st.session_state.reviews_df[st.session_state.reviews_df['label'] == 1].shape[0]
+                negative_count = st.session_state.reviews_df[st.session_state.reviews_df['label'] != 1].shape[0]
+                total_count = positive_count + negative_count
 
-        ax.set_xticklabels(review_counts['리뷰 유형'], fontproperties=fontprop)
-        ax.set_yticklabels(ax.get_yticks(), fontproperties=fontprop)
+                st.markdown(f"""
+                            총 리뷰 개수: {total_count}개
 
-        st.pyplot(fig)
+                            긍정리뷰 개수: {positive_count}개&nbsp;&nbsp;({positive_count/total_count}%)
+            
+                            부정리뷰 개수: {negative_count}개&nbsp;&nbsp;({negative_count/total_count}%)
+                            """)             
+                st.write(""); st.write(""); st.write("")
+
+
+        with col22:
+            with st.expander(label="리뷰 개수 시각화", expanded=True):
+
+                st.subheader("리뷰 개수 시각화")
+                review_counts = pd.DataFrame({
+                    '리뷰 유형': ['긍정 리뷰', '부정 리뷰'],
+                    '개수': [positive_count, negative_count]})
+
+                fig, ax = plt.subplots()
+                ax.bar(review_counts['리뷰 유형'], review_counts['개수'], color=['blue', 'orange'])
+                ax.set_xlabel("리뷰 유형", fontproperties=fontprop)
+                ax.set_ylabel("개수", fontproperties=fontprop)
+                ax.set_title("긍정 리뷰와 부정 리뷰 개수", fontproperties=fontprop)
+
+                ax.set_xticklabels(review_counts['리뷰 유형'], fontproperties=fontprop)
+                ax.set_yticklabels(ax.get_yticks(), fontproperties=fontprop)
+
+                st.pyplot(fig)
+
+        col33, col44 = st.columns(2)
+
+        with col33:
+            with st.expander(label="긍정 리뷰 단어", expanded=True):
+                st.image(st.session_state.response_image_pos)
+                st.write("")
+
+        with col44:
+            with st.expander(label="부정 리뷰 단어", expanded=True):
+                st.image(st.session_state.response_image_neg)
+                st.write("")
         
         if st.button("뒤로가기"):
             st.session_state.page = "main"
             st.session_state.active_tab = 1
             st.rerun()
 
-    elif st.session_state.page == "improvement_suggestions":
-        st.header("개선 방안")
-        st.divider()
 
-        with st.spinner("분석 중이에요..."):
+    elif st.session_state.page == "improvement_suggestions":
+
+        with st.spinner("개선 방안을 분석 중이에요..."):
             # response_feedback이 없는 경우에만 새로 생성
             if st.session_state.response_feedback is None:
                 feedback = ReviewFeedback(st.session_state.reviews_df, openai_api_key)
                 st.session_state.response_feedback = feedback.make_feedback()
         
+        st.header("개선 방안")
+        st.divider()
         st.markdown(st.session_state.response_feedback)
 
         st.divider()
@@ -191,15 +231,14 @@ def main():
             st.rerun()
 
     elif st.session_state.page == "marketing_tips":
-        st.header("마케팅 방법")
-        st.divider()
 
-        with st.spinner("분석 중이에요..."):
+        with st.spinner("마케팅 방법을 분석 중이에요..."):
             # response_marketing이 없는 경우에만 새로 생성
             if st.session_state.response_marketing is None:
                 marketing = ReviewMarketing(st.session_state.reviews_df, openai_api_key)
                 st.session_state.response_marketing = marketing.make_marketing()
-        
+        st.header("마케팅 방법")
+        st.divider()
         st.markdown(st.session_state.response_marketing)
 
         st.divider()
@@ -209,9 +248,65 @@ def main():
             st.rerun()
 
     elif st.session_state.page == "content_analysis":
-        display_content_analysis()
-        
 
+        with st.spinner("대화 내용을 분석 중이에요..."):
+            # 이미 분석이 완료된 경우 재분석하지 않도록 설정
+            if st.session_state.response_contents is None:
+                chat_analysis = ChatAnalysis(st.session_state.chat_contents, openai_api_key)
+                st.session_state.response_contents = chat_analysis.make_analysis()
+        
+        st.header("대화 내용 분석")
+        st.divider()
+        st.markdown(st.session_state.response_contents)
+
+        st.divider()
+        if st.button("뒤로가기"):
+            st.session_state.page = "main"
+            st.session_state.active_tab = 1
+            st.rerun()
+
+    elif st.session_state.page == "store_analysis":
+
+        st.subheader("경쟁사 가게 입력")
+        name_B = st.text_input('경쟁사 가게 이름을 입력하세요!', key='name_input_B')
+
+        if name_B and name_B != st.session_state.store_name_B:  # 가게 이름이 변경된 경우, 세션 초기화
+            st.session_state.store_name_B = name_B
+            st.session_state.crawling_complete_B = False
+            st.session_state.info_df_B = None
+            st.session_state.reviews_df_B = None
+
+        if st.session_state.store_name_B:  # 저장된 이름이 있으면 표시
+            st.markdown(f'「:violet[*{st.session_state.store_name_B}*]」 가게를 분석해드릴게요!&nbsp;start를 클릭해주세요.')
+
+        start = st.button("start")
+        st.divider()
+
+        if start:
+            st.session_state['start'] = True  # 버튼 상태를 세션에 저장
+            
+            if st.session_state.store_name_B: 
+                with st.spinner(f'{st.session_state.store_name_B} 가게를 분석 중이에요...'):
+                    # 이미 분석이 완료된 경우 재분석하지 않도록 설정
+                    if st.session_state.response_store_B is None:                            
+                        crawlerB = Crawling(st.session_state.store_name_B)
+                        outB = crawlerB.get_reviews()
+                        classificaB = Classification(outB, openai_api_key)
+                        st.session_state.reviews_df_B = classificaB.review_classification()
+                        sstore_analysis = StoreAnalysis(st.session_state.reviews_df, st.session_state.reviews_df_B, openai_api_key)
+                        st.session_state.response_store_B = sstore_analysis.make_store_analysis()
+                        st.session_state.crawling_complete_B = True
+                        
+            st.header("경쟁사 가게 비교")
+            st.divider()
+            st.markdown(st.session_state.response_store_B)
+            st.divider()
+
+        if st.button("뒤로가기"):
+            st.session_state.page = "main"
+            st.session_state.active_tab = 1
+            st.rerun()
+            
 def handle_tab1_content():
     st.title(":blue[리뷰 분석] 및 :blue[챗봇 생성]💩👋")
     st.write("")
@@ -269,7 +364,7 @@ def handle_tab2_content():
         st.header("리뷰들을 관리해보세요!")
         st.write(""); st.write(""); st.write("")
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     # 리뷰 분석
     with col1:
         with st.expander(label="리뷰 분석", expanded=True):
@@ -315,8 +410,27 @@ def handle_tab2_content():
                 else:
                     st.warning("리뷰 분석을 먼저 완료하세요.")
 
-    # 대화 내용 분석
+    col4, col5 = st.columns(2)
+
+    # 동종 업계 비교 분석
     with col4:
+        with st.expander(label='동종 업계 비교 분석', expanded=True):
+            st.markdown("""
+                다른 가게와 어떤 차이점이 있는지 비교해드려요.
+                
+                다른 가게와 차별화를 해보세요!
+                """)
+            st.write("")
+            if st.button("동종 업계 비교 분석"):
+                if st.session_state.review_analysis_complete:
+                    st.session_state.page = "store_analysis"
+                    st.rerun()
+                else:
+                    st.warning("리뷰 분석을 먼저 완료하세요.")
+
+
+    # 대화 내용 분석
+    with col5:
         with st.expander(label='대화 내용 분석', expanded=True):
             st.markdown("""
                 손님이 사용한 챗봇의 대화 내용을 분석해드립니다!
@@ -408,22 +522,6 @@ def handle_chatbot_tab(process, uploaded_files):
 
     if st.button("채팅 끝내기"):
         st.session_state.chatbot_finish = True
-
-def display_content_analysis():
-    st.header("대화 내용 분석")
-    st.divider()
-
-    with st.spinner("분석 중이에요..."):
-        if st.session_state.response_contents is None:
-            st.session_state.response_contents = st.session_state.chat_contents
-            for content in st.session_state.chat_contents:
-                st.markdown(content)
-
-    st.divider()
-    if st.button("뒤로가기"):
-        st.session_state.page = "main"
-        st.session_state.active_tab = 1
-        st.rerun()
         
 if __name__ == '__main__':
     main()
