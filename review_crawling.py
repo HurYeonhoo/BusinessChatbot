@@ -13,6 +13,16 @@ class Crawling:
     def __init__(self, query):
         self.query = query
         self.store_id = self.get_store_id()
+        self.chrome_options = self.initialize_chrome_options()
+
+    def initialize_chrome_options(self):
+        chrome_options = Options()
+        chrome_options.add_argument("--headless") # 창 안뜨게 하는 옵션
+        chrome_options.add_experimental_option("detach", True)
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
+        user_agent = "Mozilla/5.0 (Linux; Android 9; SM-G975F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.83 Mobile Safari/537.36"
+        chrome_options.add_argument("user-agent="+user_agent)
+        return chrome_options
 
     def get_store_id(self):
         url = f"https://search.naver.com/search.naver?where=nexearch&sm=top_hty&fbm=0&ie=utf8&query={self.query}"
@@ -36,7 +46,7 @@ class Crawling:
 
         for tab, class_name in info_tabs.items():
             url = f"https://pcmap.place.naver.com/restaurant/{self.store_id}/{tab}"
-            driver = webdriver.Chrome()
+            driver = webdriver.Chrome(options=self.chrome_options)
             driver.get(url)
             try: # 수정
                 content =  driver.find_element(By.CLASS_NAME, class_name).text # 정보 가져오기
@@ -53,7 +63,7 @@ class Crawling:
         review_tab = "review/visitor"
         class_name = "pui__vn15t2"
         url = f"https://pcmap.place.naver.com/restaurant/{self.store_id}/{review_tab}"
-        driver = webdriver.Chrome()
+        driver = webdriver.Chrome(options=self.chrome_options)
         driver.get(url)
 
         # Scroll and load more reviews
